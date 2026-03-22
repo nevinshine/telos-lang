@@ -1,80 +1,88 @@
-<div align="center">
-  <h1>🛡️ Telos Language</h1>
-  <p><b>A kernel-aware, zero-trust systems programming language.</b></p>
-  <p><i>Unifying business logic and Linux kernel security policies through dual-target LLVM BPF compilation, Z3 theorem proving, and strict Information Flow Control (IFC).</i></p>
-</div>
+Telos Systems Programming Language
+==================================
 
----
+A zero-trust, kernel-aware systems programming language designed to unify application business logic with strict Linux kernel security policies. Telos abolishes the semantic gap between how software is programmed in user-space and how it is restricted by the operating system platform.
 
-## ⚡ Core Philosophy
+## 1. Architectural Overview
 
-Traditional systems programming languages like C and Rust decouple **application logic** from **execution security**. Developers write business logic in user-space, while platform engineers enforce security boundaries via external YAML policies (Kubernetes, AppArmor, SELinux).
+Traditional systems languages (C, C++, Rust) isolate security enforcement to external layers (AppArmor, SELinux, Kubernetes policies). 
+Telos embeds the security primitives natively into the language semantics using a **Dual-Target IR Pipeline**:
 
-**Telos obliterates this semantic gap.** 
+1.  **Host Execution (User-Space LLVM IR)**: The primary application logic is compiled into generic x86_64 or AArch64 machine code using the `inkwell` LLVM wrapper.
+2.  **Sandbox Generation (BPF LLVM IR)**: Capability definitions (`intent` blocks) are recursively lowered into `BPF_PROG_TYPE_LSM` eBPF bytecode targeting specific Linux Security Module hook points.
 
-Telos elevates security primitives directly into the core language syntax. It compiles a single source file into *both* a standard host executable (x86_64/AArch64) and an embedded Ring 0 eBPF sandbox (`BPF_PROG_TYPE_LSM`). The binary mathematically cannot execute its application logic unless the kernel successfully bootstraps and attaches the eBPF isolation sandbox.
+### The Fail-Closed Bootstrap Injector
+The generated eBPF bytecode array is dynamically linked into the host ELF `.rodata` section. Telos utilizes `llvm.global_ctors` to synthesize a low-level `.init` preamble that issues raw `bpf(BPF_PROG_LOAD)` syscalls before `main()` execution. If the Linux kernel rejects the eBPF isolation sandbox bounds, the binary unconditionally aborts. A Telos binary mathematically cannot execute its internal logic without its required kernel security matrix.
 
-## 🛠️ Architecural Innovations
+## 2. Information Flow Control (IFC) Lattice
 
-### 1. Dual-Target IR Pipeline
-Telos compiles your single source file twice leveraging two parallel `inkwell` LLVM contexts:
-- **Target 1**: The user-space execution logic (e.g., standard `x86_64` machine code).
-- **Target 2**: The capability definitions are synthesized into Linux Security Module (LSM) hooks via LLVM's `bpf` backend.
+Telos guarantees non-interference and strictly isolates data trajectories through a transparent, zero-cost security lattice integrated directly into the semantic AST tree.
 
-### 2. Fail-Closed Embedded Bootstrapping
-The BPF bytecode is injected directly into the ELF's `.rodata` hex section. Telos automatically wraps the binary with an `llvm.global_ctors` `init` wrapper that evaluates `bpf(BPF_PROG_LOAD)` *before* `main()` ever runs. If the sandbox fails to attach, the binary unconditionally aborts.
-
-### 3. Z3 SMT Formal Verification
-Before the compiler generates the BPF bytecode, the internal CFG is mapped into bit-vector constraints and proven mathematically safe via statically linked Z3 SMT theorem proving. If an intent block evaluates to an invalid structural bounds limit (`-EPERM`), compilation fails.
-
-### 4. Zero-Cost Information Flow Control (IFC)
-Telos prevents data exfiltration by enforcing a strict security lattice natively inside the Type Checker.
-Constraints are evaluated via a global Program Dependence Graph (PDG) targeting Explicit Leaks (direct assignment) and Implicit Leaks (conditional PC block context tracking).
-
-## 📖 Language Syntax & Demo
-
-### Capability Intents (The Sandbox)
-Capabilities establish exactly what the isolated executable is mathematically allowed to do.
+### Data-Flow Anesthesia
+Variables are explicitly annotated using the architectural security wrappers: `Secret<T>`, `Tainted<T>`, and `Public<T>`.
 
 ```rust
-// Limits the program entirely to calling this exact domain and port.
-intent fetch {
-    allow Capability::Net::Connect {
-        host: "api.example.com",
-        port: 443,
-    }
-}
-```
-
-### Static Lattice Data-Flow (IFC)
-Variables are strictly bounded by `Secret<T>`, `Tainted<T>`, and `Public<T>` annotations.
-
-```rust
-fn explicit_leak() -> Void {
-    let shadow: Secret<String> = "/etc/shadow";
+fn core_evaluation() -> Void {
+    let critical_token: Secret<String> = "/etc/shadow";
     
-    // ❌ [COMPILER FATAL]: Cannot flow Secret data into Public sink.
-    let external_buffer: Public<String> = shadow;
+    // [TELOS FATAL]: ExplicitLeak("Cannot flow Secret data into Public sink in assignment 'external_socket'")
+    let external_socket: Public<String> = critical_token;
 }
 ```
 
-Implicit leaks are strictly tracked through branch bounds using PC-evaluation stack pushes:
+### Implicit Context Boundaries (Program Dependence Graphs)
+Conditional jumps inherently bind their enclosed scope variables. The internal `typecheck.rs` evaluation model strictly evaluates the structural ceiling via a dynamic Program Counter (PC) stack to prevent indirect leaks.
 
 ```rust
 fn implicit_leak() -> Void {
-    let condition: Secret<I64> = 1;
-    let b: Public<I64> = 0;
+    let internal_eval: Secret<I64> = 1;
+    let outbound_telemetry: Public<I64> = 0;
     
-    if condition {
-        // ❌ [COMPILER FATAL]: Cannot assign to Public sink inside a Secret PC-Stack boundary!
-        b = 1; 
+    // Pushing the `Secret` context onto the local PC evaluation stack
+    if internal_eval {
+        // [TELOS FATAL]: ImplicitLeak("Cannot flow Secret data into Public sink in assignment 'outbound_telemetry'")
+        outbound_telemetry = 1; 
     }
 }
 ```
 
-## 🚀 Project Status & Roadmap
-- [x] **Phase 1**: Dual-Target LLVM Pipeline & `init` fail-closed BPF array bootstrapping.
-- [x] **Phase 2**: Semantic-to-LSM translation (mapping Intent to Socket/File `eBPF` hooks).
-- [x] **Phase 3**: Static IFC Typechecker (Explicit and Implicit graph flow bounds).
-- [x] **Phase 5**: Z3 SMT integration verifying BPF memory bounds dynamically.
-- [ ] **Phase 4**: Pipelock MCP integration (Streaming eBPF context buffers to Layer 7 hardware syncs).
+--- 
+
+## 3. Z3 SMT Formal Verification
+
+The compiler actively incorporates static theorem proving into its translation bounds. During compilation within `verify_smt.rs`, the generated LLVM Basic Blocks representing the eBPF LSM intercept hooks are statically modeled as Bit-Vector representations. 
+
+Before the BPF sandbox array is serialized, the Z3 SMT Theorem Prover calculates all operational CFG branching constraints to prove:
+- Division-by-Zero safety.
+- Restricted Shift Ranges.
+- Pointer Arithmetic bounds.
+- Valid Linux LSM Return structural values (`0` for success or `-EPERM`/`-1` access denied limitations).
+
+If the Z3 model evaluates to `SAT` (a violating sequence is computationally possible), compilation aborts.
+
+## 4. Immediate Roadmap and Missing Core Implementation Constraints
+
+The current minimal viable compiler operates Phase 5 architecture natively. The following elements must be implemented to achieve the final Phase 6 production architecture:
+
+### Phase 3 Missing Files (To be implemented):
+-   `src/declassify.rs`: The cryptographic declassification boundary. Telos currently rejects any flow down the lattice. We must expose `declassify()` primitives (bound algorithms like `AES-GCM` or `SHA-256`) that explicitly down-cast `Secret<T>` payload hashes into `Public<T>`.
+-   `tests/declassify_pass.telos`: To prove cryptographic algorithms actively circumvent the typechecker bounds.
+
+### Phase 4 Missing Files (To be implemented):
+-   "Pipelock" MCP Firewall Synchronization (`src/codegen/pipelock.rs`).
+-   Implement structural LLVM synthesis mapping for zero-copy `BPF_MAP_TYPE_USER_RINGBUF` maps.
+-   Stream internal kernel contextual boundaries up dynamically into external Layer 7 proxy implementations (like a remote LLM API firewall block proxy).
+-   SipHash-2-4 HMAC integration for validation sequence validation tokens within the Ring 0 context buffer.
+
+## 5. Build and Execution Instructions
+
+All generation is contained within the `telosc` root crate wrapper.
+
+```bash
+# Standard Compilation Check:
+cargo check
+
+# Evaluate the internal implicit and explicit flow-graph validations:
+cargo run tests/ifc_fail.telos
+cargo run tests/ifc_implicit.telos
+```
