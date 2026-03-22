@@ -1,0 +1,12 @@
+[package]
+name = "telosc"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+inkwell = { version = "0.1.1", features = ["llvm15-0"] }
+chumsky = "0.9"
+goblin = "0.8"
+z3 = { version = "0.12", features = ["static-link-z3"] }
+either = "1.9"
+smallvec = "1.11"

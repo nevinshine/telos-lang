@@ -1,0 +1,4 @@
+fn explicit_leak() -> Void {
+    let a: Secret<I64> = 42;
+    let b: Public<I64> = a;
+}

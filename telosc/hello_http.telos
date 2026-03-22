@@ -1,0 +1,6 @@
+intent fetch {
+    allow Capability::Net::Connect {
+        host: "api.example.com",
+        port: 443,
+    }
+}

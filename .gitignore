@@ -1,0 +1,5 @@
+# Ignore cargo build targets and heavy artifacts
+telosc/target/
+**/*.o
+**/*.log
+test_bin

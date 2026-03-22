@@ -1,0 +1,8 @@
+fn implicit_leak() -> Void {
+    let condition: Secret<I64> = 1;
+    let b: Public<I64> = 0;
+    
+    if condition {
+        b = 1;
+    }
+}
