@@ -39,7 +39,7 @@ pub fn inject_preamble<'a>(ctx: &'a Context, module: &Module<'a>, bpf_hooks: Vec
         true, false, None, false
     );
 
-    for (id, (_name, bytes)) in bpf_hooks.iter().enumerate() {
+    for (id, (name, bytes)) in bpf_hooks.iter().enumerate() {
         let bpf_array = i8_type.const_array(&bytes.iter().map(|&b| i8_type.const_int(b as u64, false)).collect::<Vec<_>>());
         let global_bpf = module.add_global(bpf_array.get_type(), None, &format!("__telos_bpf_bytecode_{}", id));
         global_bpf.set_initializer(&bpf_array);
@@ -50,9 +50,10 @@ pub fn inject_preamble<'a>(ctx: &'a Context, module: &Module<'a>, bpf_hooks: Vec
         builder.build_store(attr_alloca, attr_array_type.const_zero()); // zero-init
         let i8_ptr = builder.build_pointer_cast(attr_alloca, i8_ptr_type, "attr_i8_ptr");
 
-        // prog_type = 29
+        // prog_type = 29 for LSM, 21 for XDP
+        let prog_type_val = if name.starts_with("xdp/") { 21 } else { 29 };
         let prog_type_ptr = builder.build_pointer_cast(i8_ptr, i32_type.ptr_type(inkwell::AddressSpace::default()), "prog_type_ptr");
-        builder.build_store(prog_type_ptr, i32_type.const_int(29, false));
+        builder.build_store(prog_type_ptr, i32_type.const_int(prog_type_val, false));
 
         // insn_cnt = bytes.len() / 8
         let insn_cnt_gep = unsafe { builder.build_gep(i8_type, i8_ptr, &[i32_type.const_int(4, false)], "") };
@@ -72,7 +73,8 @@ pub fn inject_preamble<'a>(ctx: &'a Context, module: &Module<'a>, bpf_hooks: Vec
         // expected_attach_type (BPF_LSM_MAC = 27)
         let attach_gep = unsafe { builder.build_gep(i8_type, i8_ptr, &[i32_type.const_int(68, false)], "") };
         let attach_ptr = builder.build_pointer_cast(attach_gep, i32_type.ptr_type(inkwell::AddressSpace::default()), "");
-        builder.build_store(attach_ptr, i32_type.const_int(27, false));
+        let attach_val = if name.starts_with("lsm/") { 27 } else { 0 };
+        builder.build_store(attach_ptr, i32_type.const_int(attach_val, false));
 
         // Call BPF_PROG_LOAD (5)
         let load_res = builder.build_indirect_call(
@@ -135,6 +137,23 @@ pub fn inject_preamble<'a>(ctx: &'a Context, module: &Module<'a>, bpf_hooks: Vec
         builder.build_unreachable();
 
         builder.position_at_end(cont_bb_attach);
+
+        // Phase 7: Heki Hypercall Integration
+        // Issue VMCALL to Ring -1 Hypervisor (Sentinel VMI / telos_npt.rs)
+        // Registering the loaded BPF File Descriptor for EPT lockdown
+        let vmcall_fn_type = void_type.fn_type(&[i64_type.into(), i64_type.into()], false);
+        let vmcall_asm = ctx.create_inline_asm(
+            vmcall_fn_type,
+            "vmcall".to_string(),
+            "{rax},{rbx},~{memory}".to_string(),
+            true, false, None, false
+        );
+        let load_res_i64 = builder.build_int_cast(load_res, i64_type, "load_res_i64");
+        builder.build_indirect_call(
+            vmcall_fn_type, vmcall_asm,
+            &[i64_type.const_int(0x48454B49, false).into(), load_res_i64.into()],
+            "sys_heki_register"
+        );
     }
     
     builder.build_return(None);

@@ -281,6 +281,9 @@ pub fn emit_sandbox(ctx: &Context, machine: &TargetMachine, _intents: &[IntentDe
     synthesize_socket_connect_hook(ctx, &module, net_allow_map, ringbuf_map);
     synthesize_file_open_hook(ctx, &module, file_allow_map, ringbuf_map);
 
+    // Phase 9: XDP Bridge Support
+    crate::codegen::xdp::synthesize_xdp_bridge(ctx, &module, net_allow_map);
+
     // Phase 5: SMT Verification pass
     println!("[TELOS] Running SMT formal verification...");
     let z3_config = Config::new();
@@ -314,7 +317,7 @@ pub fn emit_sandbox(ctx: &Context, machine: &TargetMachine, _intents: &[IntentDe
     let mut hooks = Vec::new();
     for section_header in &elf.section_headers {
         if let Some(name) = elf.shdr_strtab.get_at(section_header.sh_name) {
-            if name.starts_with("lsm/") {
+            if name.starts_with("lsm/") || name.starts_with("xdp/") {
                 let start = section_header.sh_offset as usize;
                 let end = start + section_header.sh_size as usize;
                 hooks.push((name.to_string(), elf_bytes[start..end].to_vec()));

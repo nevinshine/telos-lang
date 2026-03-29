@@ -1,6 +1,7 @@
 pub mod parser;
 pub mod typecheck;
 pub mod codegen;
+pub mod heki;
 
 use inkwell::context::Context;
 use crate::parser::Program;
