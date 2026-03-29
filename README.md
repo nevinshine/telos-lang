@@ -3,7 +3,7 @@ Telos Systems Programming Language
 
 A zero-trust, kernel-aware systems programming language designed to unify application business logic with strict Linux kernel security policies. Telos abolishes the semantic gap between how software is programmed in user-space and how it is protected by the operating system platform. 
 
-**All 6 Architectural Phases are Fully Complete.** Telos is actively capable of generating dual-target, formally verified cross-boundary Linux executables from a single parsed file.
+**All 9 Architectural Phases are Fully Complete.** Telos is actively capable of generating dual-target, formally verified cross-boundary Linux executables from a single parsed file.
 
 ## Language Features 
 
@@ -14,6 +14,8 @@ A zero-trust, kernel-aware systems programming language designed to unify applic
 * **Semantic LSM Intent Extraction**: Capabilities mapped natively into BPF hash maps automatically intercept `socket_connect` and `file_open` Linux Security Modules.
 * **Pipelock MCP Synchronization**: Integrates native Ringbuffer streaming from the eBPF layer into a local JSON-RPC consumer thread for Model Context Protocol (MCP) telemetry export.
 * **Z3 SMT Formal Verification**: Every basic block of the eBPF hook is formally constrained by Microsoft Z3 to mathematically prove memory safety and structural adherence before compilation concludes.
+* **AARM Cryptographic Receipts (Phase 8)**: Native SipHash-2-4 IR generation within the eBPF context, providing tamper-evident forensic receipts for Autonomous Action Runtime Management (AARM) compliance.
+* **Hyperion XDP Bridge (Phase 9)**: Hardware-level network drops using `BPF_PROG_TYPE_XDP`. Intercepts and drops unauthorized packets at the NIC driver level, bypassing the kernel networking stack for extreme performance.
 
 
 ## 1. Architectural Overview

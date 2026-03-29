@@ -204,13 +204,15 @@ fn synthesize_ringbuf_map<'ctx>(
     global_map
 }
 
-/// Build the TelosEvent struct type: { u32 event_type, u32 pid, u32 decision, u64 timestamp }
+/// Build the TelosEvent struct type: AARM Compliant Forensic Profile (32-bytes)
 fn telos_event_struct_type<'ctx>(ctx: &'ctx Context) -> inkwell::types::StructType<'ctx> {
     ctx.struct_type(&[
         ctx.i32_type().into(),  // event_type: 1=connect, 2=file_open
-        ctx.i32_type().into(),  // pid (placeholder, filled by helper)
+        ctx.i32_type().into(),  // pid (placeholder)
         ctx.i32_type().into(),  // decision: 0=allow, 1=deny
-        ctx.i64_type().into(),  // timestamp (placeholder)
+        ctx.i32_type().into(),  // alignment padding
+        ctx.i64_type().into(),  // timestamp placeholder
+        ctx.i64_type().into(),  // aarm_crypto receipt hash
     ], false)
 }
 
@@ -229,35 +231,40 @@ fn inject_ringbuf_event<'ctx>(
     let i64_type = ctx.i64_type();
     let i8_ptr_type = i8_type.ptr_type(inkwell::AddressSpace::default());
 
-    // Create a unique global name for this specific event constant
-    let global_name = format!("telos_event_{}_{}", event_type, decision);
-
     let event_struct = telos_event_struct_type(ctx);
-    let event_val = event_struct.const_named_struct(&[
-        i32_type.const_int(event_type as u64, false).into(),
-        i32_type.const_int(0, false).into(),                   // pid placeholder
-        i32_type.const_int(decision as u64, false).into(),
-        i64_type.const_int(0, false).into(),                    // timestamp placeholder
-    ]);
+    
+    // Initialize AARM Symmetric MAC Key for signing executions
+    let mac_key_global = module.get_global("__telos_aarm_mac_key").unwrap_or_else(|| {
+        let g = module.add_global(i64_type, None, "__telos_aarm_mac_key");
+        g.set_initializer(&i64_type.const_int(0x0123456789ABCDEF, false));
+        g.set_linkage(inkwell::module::Linkage::Internal);
+        g
+    });
 
-    let event_global = module.add_global(event_struct, None, &global_name);
-    event_global.set_initializer(&event_val);
-    event_global.set_linkage(Linkage::Internal);
+    let mac_key_loaded = builder.build_load(i64_type, mac_key_global.as_pointer_value(), "mac_val").into_int_value();
+    let decision_i64 = builder.build_int_cast(i32_type.const_int(decision as u64, false), i64_type, "dec_i64");
+    let receipt_hash = crate::codegen::aarm_crypto::synthesize_siphash_receipt(ctx, builder, decision_i64, mac_key_loaded);
 
-    // Call bpf_ringbuf_output(ringbuf, &event, sizeof(event), 0)
-    // Helper ID 130 = bpf_ringbuf_output
-    let ringbuf_fn_type = i64_type.fn_type(&[
-        i8_ptr_type.into(), i8_ptr_type.into(), i64_type.into(), i64_type.into(),
-    ], false);
-    let ringbuf_helper = builder.build_int_to_ptr(
-        i64_type.const_int(130, false),
-        ringbuf_fn_type.ptr_type(inkwell::AddressSpace::default()),
-        "ringbuf_fn_ptr",
-    );
+    let event_alloca = builder.build_alloca(event_struct, "event_alloca");
+    
+    let event_type_ptr = unsafe { builder.build_gep(event_struct, event_alloca, &[i32_type.const_zero(), i32_type.const_zero()], "") };
+    builder.build_store(event_type_ptr, i32_type.const_int(event_type as u64, false));
 
-    let map_ptr = builder.build_pointer_cast(ringbuf_map.as_pointer_value(), i8_ptr_type, "rb_map_cast");
-    let event_ptr = builder.build_pointer_cast(event_global.as_pointer_value(), i8_ptr_type, "event_cast");
-    let event_size = i64_type.const_int(20, false); // 4+4+4+8 = 20 bytes
+    let pid_ptr = unsafe { builder.build_gep(event_struct, event_alloca, &[i32_type.const_zero(), i32_type.const_int(1, false)], "") };
+    builder.build_store(pid_ptr, i32_type.const_zero());
+
+    let dec_ptr = unsafe { builder.build_gep(event_struct, event_alloca, &[i32_type.const_zero(), i32_type.const_int(2, false)], "") };
+    builder.build_store(dec_ptr, i32_type.const_int(decision as u64, false));
+
+    let hash_ptr = unsafe { builder.build_gep(event_struct, event_alloca, &[i32_type.const_zero(), i32_type.const_int(5, false)], "") };
+    builder.build_store(hash_ptr, receipt_hash);
+
+    let ringbuf_fn_type = i64_type.fn_type(&[i8_ptr_type.into(), i8_ptr_type.into(), i64_type.into(), i64_type.into()], false);
+    let ringbuf_helper = builder.build_int_to_ptr(i64_type.const_int(130, false), ringbuf_fn_type.ptr_type(inkwell::AddressSpace::default()), "");
+
+    let map_ptr = builder.build_pointer_cast(ringbuf_map.as_pointer_value(), i8_ptr_type, "");
+    let event_ptr = builder.build_pointer_cast(event_alloca, i8_ptr_type, "event_cast");
+    let event_size = i64_type.const_int(32, false); // 4+4+4+4+8+8 = 32 bytes
 
     builder.build_indirect_call(
         ringbuf_fn_type,

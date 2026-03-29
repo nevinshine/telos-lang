@@ -4,6 +4,7 @@ pub mod bootstrap;
 pub mod verify_smt;
 pub mod pipelock;
 pub mod xdp;
+pub mod aarm_crypto;
 
 use inkwell::context::Context;
 use inkwell::targets::{Target, TargetTriple, RelocMode, CodeModel, InitializationConfig};
