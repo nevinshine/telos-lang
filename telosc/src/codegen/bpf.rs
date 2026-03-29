@@ -42,6 +42,7 @@ fn synthesize_socket_connect_hook<'ctx>(
     ctx: &'ctx Context,
     module: &inkwell::module::Module<'ctx>,
     net_allow_map: GlobalValue<'ctx>,
+    ringbuf_map: GlobalValue<'ctx>,
 ) {
     let builder = ctx.create_builder();
     let i8_type = ctx.i8_type();
@@ -107,12 +108,13 @@ fn synthesize_socket_connect_hook<'ctx>(
 
     // Deny (-1 or -EPERM)
     builder.position_at_end(deny_bb);
-    // Explicitly use unsigned bitwise NOT for -1 since LLVM represents negative natively with two's complement.
+    inject_ringbuf_event(ctx, &builder, module, ringbuf_map, 1, 1); // event_type=1(connect), decision=1(deny)
     let neg_one = i32_type.const_int(!0, false); 
     builder.build_return(Some(&neg_one));
 
     // Allow (0)
     builder.position_at_end(allow_bb);
+    inject_ringbuf_event(ctx, &builder, module, ringbuf_map, 1, 0); // event_type=1(connect), decision=0(allow)
     builder.build_return(Some(&i32_type.const_int(0, false)));
 }
 
@@ -120,6 +122,7 @@ fn synthesize_file_open_hook<'ctx>(
     ctx: &'ctx Context,
     module: &inkwell::module::Module<'ctx>,
     file_allow_map: GlobalValue<'ctx>,
+    ringbuf_map: GlobalValue<'ctx>,
 ) {
     let builder = ctx.create_builder();
     let i8_type = ctx.i8_type();
@@ -165,25 +168,118 @@ fn synthesize_file_open_hook<'ctx>(
     builder.build_conditional_branch(is_null, deny_bb, allow_bb);
 
     builder.position_at_end(deny_bb);
+    inject_ringbuf_event(ctx, &builder, module, ringbuf_map, 2, 1); // event_type=2(file_open), decision=1(deny)
     builder.build_return(Some(&i32_type.const_int(!0, false))); // -EPERM
 
     builder.position_at_end(allow_bb);
+    inject_ringbuf_event(ctx, &builder, module, ringbuf_map, 2, 0); // event_type=2(file_open), decision=0(allow)
     builder.build_return(Some(&i32_type.const_int(0, false))); // OK
 }
 
 use crate::codegen::verify_smt::{SMTVerifier, VerificationResult};
 use z3::{Config, Context as Z3Context};
 
+/// Synthesize a BPF_MAP_TYPE_RINGBUF for streaming kernel events to user-space.
+fn synthesize_ringbuf_map<'ctx>(
+    ctx: &'ctx Context,
+    module: &inkwell::module::Module<'ctx>,
+) -> GlobalValue<'ctx> {
+    let i32_type = ctx.i32_type();
+    let map_struct_type = ctx.struct_type(&[
+        i32_type.into(), i32_type.into(), i32_type.into(), i32_type.into(), i32_type.into(),
+    ], false);
+
+    let map_struct_val = map_struct_type.const_named_struct(&[
+        i32_type.const_int(27, false).into(), // BPF_MAP_TYPE_RINGBUF = 27
+        i32_type.const_int(0, false).into(),   // key_size = 0 (ringbuf ignores)
+        i32_type.const_int(0, false).into(),   // value_size = 0 (ringbuf ignores)
+        i32_type.const_int(262144, false).into(), // max_entries = 256KB
+        i32_type.const_int(0, false).into(),   // map_flags = 0
+    ]);
+
+    let global_map = module.add_global(map_struct_type, None, "telos_event_ringbuf");
+    global_map.set_initializer(&map_struct_val);
+    global_map.set_section(Some("maps"));
+    global_map.set_linkage(Linkage::External);
+    global_map
+}
+
+/// Build the TelosEvent struct type: { u32 event_type, u32 pid, u32 decision, u64 timestamp }
+fn telos_event_struct_type<'ctx>(ctx: &'ctx Context) -> inkwell::types::StructType<'ctx> {
+    ctx.struct_type(&[
+        ctx.i32_type().into(),  // event_type: 1=connect, 2=file_open
+        ctx.i32_type().into(),  // pid (placeholder, filled by helper)
+        ctx.i32_type().into(),  // decision: 0=allow, 1=deny
+        ctx.i64_type().into(),  // timestamp (placeholder)
+    ], false)
+}
+
+/// Inject a bpf_ringbuf_output() call into an LSM hook basic block.
+/// Uses a global constant struct (no alloca) to satisfy BPF stack constraints.
+fn inject_ringbuf_event<'ctx>(
+    ctx: &'ctx Context,
+    builder: &inkwell::builder::Builder<'ctx>,
+    module: &inkwell::module::Module<'ctx>,
+    ringbuf_map: GlobalValue<'ctx>,
+    event_type: u32,
+    decision: u32,
+) {
+    let i8_type = ctx.i8_type();
+    let i32_type = ctx.i32_type();
+    let i64_type = ctx.i64_type();
+    let i8_ptr_type = i8_type.ptr_type(inkwell::AddressSpace::default());
+
+    // Create a unique global name for this specific event constant
+    let global_name = format!("telos_event_{}_{}", event_type, decision);
+
+    let event_struct = telos_event_struct_type(ctx);
+    let event_val = event_struct.const_named_struct(&[
+        i32_type.const_int(event_type as u64, false).into(),
+        i32_type.const_int(0, false).into(),                   // pid placeholder
+        i32_type.const_int(decision as u64, false).into(),
+        i64_type.const_int(0, false).into(),                    // timestamp placeholder
+    ]);
+
+    let event_global = module.add_global(event_struct, None, &global_name);
+    event_global.set_initializer(&event_val);
+    event_global.set_linkage(Linkage::Internal);
+
+    // Call bpf_ringbuf_output(ringbuf, &event, sizeof(event), 0)
+    // Helper ID 130 = bpf_ringbuf_output
+    let ringbuf_fn_type = i64_type.fn_type(&[
+        i8_ptr_type.into(), i8_ptr_type.into(), i64_type.into(), i64_type.into(),
+    ], false);
+    let ringbuf_helper = builder.build_int_to_ptr(
+        i64_type.const_int(130, false),
+        ringbuf_fn_type.ptr_type(inkwell::AddressSpace::default()),
+        "ringbuf_fn_ptr",
+    );
+
+    let map_ptr = builder.build_pointer_cast(ringbuf_map.as_pointer_value(), i8_ptr_type, "rb_map_cast");
+    let event_ptr = builder.build_pointer_cast(event_global.as_pointer_value(), i8_ptr_type, "event_cast");
+    let event_size = i64_type.const_int(20, false); // 4+4+4+8 = 20 bytes
+
+    builder.build_indirect_call(
+        ringbuf_fn_type,
+        ringbuf_helper,
+        &[map_ptr.into(), event_ptr.into(), event_size.into(), i64_type.const_int(0, false).into()],
+        "ringbuf_output_call",
+    );
+}
+
 pub fn emit_sandbox(ctx: &Context, machine: &TargetMachine, _intents: &[IntentDecl]) -> Vec<(String, Vec<u8>)> {
     let module = ctx.create_module("telos_sandbox");
 
-    // Phase 2: Synthesize required Hash Maps First
-    let net_allow_map = synthesize_policy_map(ctx, &module, "telos_net_allow", 4, 2, 256); // Key: u32 (IP), Value: u16 (Port)
-    let file_allow_map = synthesize_policy_map(ctx, &module, "telos_file_allow", 256, 4, 256); // Key: FilePath (256b), Value: u32 (Mode)
+    // Phase 2: Synthesize required Hash Maps
+    let net_allow_map = synthesize_policy_map(ctx, &module, "telos_net_allow", 4, 2, 256);
+    let file_allow_map = synthesize_policy_map(ctx, &module, "telos_file_allow", 256, 4, 256);
 
-    // Phase 2: Integrate the proper Hooks
-    synthesize_socket_connect_hook(ctx, &module, net_allow_map);
-    synthesize_file_open_hook(ctx, &module, file_allow_map);
+    // Phase 4: Synthesize Ringbuf for Pipelock event streaming
+    let ringbuf_map = synthesize_ringbuf_map(ctx, &module);
+
+    // Phase 2: Integrate the proper Hooks (now with ringbuf injection)
+    synthesize_socket_connect_hook(ctx, &module, net_allow_map, ringbuf_map);
+    synthesize_file_open_hook(ctx, &module, file_allow_map, ringbuf_map);
 
     // Phase 5: SMT Verification pass
     println!("[TELOS] Running SMT formal verification...");

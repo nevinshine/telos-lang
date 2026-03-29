@@ -1,0 +1,15 @@
+intent fetch {
+    allow Capability::Net::Connect {
+        host: "api.example.com",
+        port: 443,
+    }
+}
+
+sync pipelock {
+    endpoint: "localhost:9090",
+}
+
+fn main() -> Void {
+    let token: Secret<String> = "api_key_12345";
+    let safe: Public<String> = declassify(token, "SHA-256");
+}

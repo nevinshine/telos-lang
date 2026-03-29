@@ -2,6 +2,7 @@ pub mod bpf;
 pub mod host;
 pub mod bootstrap;
 pub mod verify_smt;
+pub mod pipelock;
 
 use inkwell::context::Context;
 use inkwell::targets::{Target, TargetTriple, RelocMode, CodeModel, InitializationConfig};
@@ -50,5 +51,11 @@ impl<'ctx> DualCompiler<'ctx> {
 
         // 5. Generate Host Executable and embed the BPF bytes
         host::emit_executable(self.host_ctx, &host_machine, &program.functions, bpf_hooks);
+
+        // 6. Phase 4: Synthesize Pipelock MCP consumer in host module
+        println!("[TELOS PIPELOCK] Synthesizing MCP event consumer...");
+        let pipelock_module = self.host_ctx.create_module("telos_pipelock");
+        let consumer_fn = pipelock::synthesize_event_consumer(self.host_ctx, &pipelock_module);
+        pipelock::synthesize_consumer_spawner(self.host_ctx, &pipelock_module, consumer_fn);
     }
 }

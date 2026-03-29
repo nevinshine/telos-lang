@@ -73,9 +73,16 @@ pub struct Function {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct SyncDecl {
+    pub target: String,
+    pub endpoint: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct Program {
     pub intents: Vec<IntentDecl>,
     pub functions: Vec<Function>,
+    pub syncs: Vec<SyncDecl>,
 }
 
 // --- PARSER COMBINATORS ---
@@ -230,10 +237,30 @@ pub fn function_parser() -> impl Parser<char, Function, Error = Simple<char>> {
         })
 }
 
+pub fn sync_parser() -> impl Parser<char, SyncDecl, Error = Simple<char>> {
+    let string_literal = filter(|&c: &char| c != '"')
+        .repeated()
+        .delimited_by(just('"'), just('"'))
+        .collect::<String>();
+
+    let endpoint_field = just("endpoint:").padded()
+        .ignore_then(string_literal)
+        .then_ignore(just(',').padded().or_not());
+
+    just("sync").padded()
+        .ignore_then(text::ident().padded())
+        .then(
+            endpoint_field.or_not()
+                .delimited_by(just('{').padded(), just('}').padded())
+        )
+        .map(|(target, endpoint)| SyncDecl { target, endpoint })
+}
+
 pub fn program_parser() -> impl Parser<char, Program, Error = Simple<char>> {
     intent_parser().repeated().padded()
+        .then(sync_parser().repeated().padded())
         .then(function_parser().repeated().padded())
-        .map(|(intents, functions)| Program { intents, functions })
+        .map(|((intents, syncs), functions)| Program { intents, functions, syncs })
         .then_ignore(end())
 }
 

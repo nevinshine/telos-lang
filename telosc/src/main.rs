@@ -15,6 +15,7 @@ fn main() {
     let mut program = Program {
         intents: vec![],
         functions: vec![],
+        syncs: vec![],
     };
 
     if args.len() > 1 {
