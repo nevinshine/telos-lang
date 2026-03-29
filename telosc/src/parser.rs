@@ -60,6 +60,8 @@ pub enum Stmt {
     Let(String, Type, Expr),
     Assign(String, Expr),
     If(Expr, Vec<Stmt>),
+    While(Expr, Vec<Stmt>),
+    Return(Option<Expr>),
     Expr(Expr),
 }
 
@@ -135,6 +137,8 @@ pub fn intent_parser() -> impl Parser<char, IntentDecl, Error = Simple<char>> {
 }
 
 pub fn type_parser() -> impl Parser<char, Type, Error = Simple<char>> {
+    let void_type = just("Void").to(Type::Void);
+
     let label = just("Secret").to(SecurityLabel::Secret)
         .or(just("Tainted").to(SecurityLabel::Tainted))
         .or(just("Public").to(SecurityLabel::Public));
@@ -142,7 +146,7 @@ pub fn type_parser() -> impl Parser<char, Type, Error = Simple<char>> {
     let string_inner = just("String");
     let int_inner = just("I64");
 
-    label
+    let secure_type = label
         .then(just('<').padded())
         .then(string_inner.or(int_inner))
         .then(just('>').padded())
@@ -152,10 +156,14 @@ pub fn type_parser() -> impl Parser<char, Type, Error = Simple<char>> {
             } else {
                 Type::I64(lbl)
             }
-        })
+        });
+
+    void_type.or(secure_type)
 }
 
 pub fn expr_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
+    let mut expr = Recursive::declare();
+
     let string_literal = filter(|&c: &char| c != '"')
         .repeated()
         .delimited_by(just('"'), just('"'))
@@ -181,8 +189,15 @@ pub fn expr_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
         .then(algorithm_literal.padded())
         .then_ignore(just(')').padded())
         .map(|(var_name, algo)| Expr::Declassify(Box::new(Expr::Var(var_name)), algo));
-    
-    declassify.or(string_literal).or(number_literal).or(var).padded()
+
+    let call = text::ident().padded()
+        .then(expr.clone().separated_by(just(',').padded())
+              .allow_trailing()
+              .delimited_by(just('(').padded(), just(')').padded()))
+        .map(|(name, args)| Expr::Call(name, args));
+
+    expr.define(declassify.or(call).or(string_literal).or(number_literal).or(var).padded());
+    expr
 }
 
 pub fn stmt_parser() -> impl Parser<char, Stmt, Error = Simple<char>> {
@@ -215,23 +230,44 @@ pub fn stmt_parser() -> impl Parser<char, Stmt, Error = Simple<char>> {
         .then_ignore(just('}').padded())
         .map(|(cond, body)| Stmt::If(cond, body));
 
-    stmt.define(let_stmt.or(assign_stmt).or(if_stmt).or(expr_stmt));
+    let while_stmt = just("while").padded()
+        .ignore_then(expr_parser().padded())
+        .then_ignore(just('{').padded())
+        .then(stmt.clone().repeated())
+        .then_ignore(just('}').padded())
+        .map(|(cond, body)| Stmt::While(cond, body));
+
+    let return_stmt = just("return").padded()
+        .ignore_then(expr_parser().or_not())
+        .then_ignore(just(';').padded())
+        .map(Stmt::Return);
+
+    stmt.define(let_stmt.or(assign_stmt).or(if_stmt).or(while_stmt).or(return_stmt).or(expr_stmt));
     stmt
 }
 
 pub fn function_parser() -> impl Parser<char, Function, Error = Simple<char>> {
+    let arg_parser = text::ident().padded()
+        .then_ignore(just(':').padded())
+        .then(type_parser().padded());
+
+    let args_parser = arg_parser
+        .separated_by(just(',').padded())
+        .allow_trailing()
+        .delimited_by(just('(').padded(), just(')').padded());
+
     just("fn").padded()
         .ignore_then(text::ident().padded())
-        .then_ignore(just("()").padded())
+        .then(args_parser)
         .then_ignore(just("->").padded())
-        .then(just("Void").padded().to(Type::Void))
+        .then(type_parser().padded())
         .then_ignore(just('{').padded())
         .then(stmt_parser().repeated())
         .then_ignore(just('}').padded())
-        .map(|((name, ret_type), body)| Function {
+        .map(|(((name, args), ret_type), body)| Function {
             name,
             bound_intent: None,
-            args: vec![],
+            args,
             ret_type,
             body
         })

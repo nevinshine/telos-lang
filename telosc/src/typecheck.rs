@@ -22,13 +22,18 @@ pub enum TypeError {
 }
 
 pub fn typecheck_program(program: &Program) -> Result<(), TypeError> {
+    let mut func_sigs = HashMap::new();
     for func in &program.functions {
-        typecheck_function(func)?;
+        func_sigs.insert(func.name.clone(), get_label(&func.ret_type));
+    }
+
+    for func in &program.functions {
+        typecheck_function(func, &func_sigs)?;
     }
     Ok(())
 }
 
-fn typecheck_function(func: &Function) -> Result<(), TypeError> {
+fn typecheck_function(func: &Function, func_sigs: &HashMap<String, SecurityLabel>) -> Result<(), TypeError> {
     let mut env: HashMap<String, SecurityLabel> = HashMap::new();
     let mut pc_stack: Vec<SecurityLabel> = Vec::new();
 
@@ -37,15 +42,15 @@ fn typecheck_function(func: &Function) -> Result<(), TypeError> {
         env.insert(arg_name.clone(), get_label(arg_type));
     }
 
-    typecheck_stmts(&func.body, &mut env, &mut pc_stack)
+    typecheck_stmts(&func.body, &mut env, &mut pc_stack, &func.ret_type, func_sigs)
 }
 
-fn typecheck_stmts(stmts: &[Stmt], env: &mut HashMap<String, SecurityLabel>, pc_stack: &mut Vec<SecurityLabel>) -> Result<(), TypeError> {
+fn typecheck_stmts(stmts: &[Stmt], env: &mut HashMap<String, SecurityLabel>, pc_stack: &mut Vec<SecurityLabel>, ret_type: &Type, func_sigs: &HashMap<String, SecurityLabel>) -> Result<(), TypeError> {
     for stmt in stmts {
         match stmt {
             Stmt::Let(name, ty, expr) => {
                 let decl_label = get_label(ty);
-                let expr_label = evaluate_label(expr, env)?;
+                let expr_label = evaluate_label(expr, env, func_sigs)?;
                 
                 // Enforce Explicit Flow
                 check_flow(&expr_label, &decl_label).map_err(|e| TypeError::ExplicitLeak(format!("{} in binding '{}'", e, name)))?;
@@ -58,7 +63,7 @@ fn typecheck_stmts(stmts: &[Stmt], env: &mut HashMap<String, SecurityLabel>, pc_
             }
             Stmt::Assign(name, expr) => {
                 let target_label = env.get(name).ok_or_else(|| TypeError::UndefinedVariable(name.clone()))?.clone();
-                let expr_label = evaluate_label(expr, env)?;
+                let expr_label = evaluate_label(expr, env, func_sigs)?;
                 
                 check_flow(&expr_label, &target_label).map_err(|e| TypeError::ExplicitLeak(format!("{} in assignment '{}'", e, name)))?;
                 
@@ -67,15 +72,35 @@ fn typecheck_stmts(stmts: &[Stmt], env: &mut HashMap<String, SecurityLabel>, pc_
                 check_flow(&effective_pc, &target_label).map_err(|e| TypeError::ImplicitLeak(format!("{} in assignment '{}'", e, name)))?;
             }
             Stmt::If(cond, body) => {
-                let cond_label = evaluate_label(cond, env)?;
+                let cond_label = evaluate_label(cond, env, func_sigs)?;
                 pc_stack.push(cond_label); // Push conditional scope bounds
                 
-                typecheck_stmts(body, env, pc_stack)?;
+                typecheck_stmts(body, env, pc_stack, ret_type, func_sigs)?;
                 
                 pc_stack.pop(); // Pop off context
             }
+            Stmt::While(cond, body) => {
+                let cond_label = evaluate_label(cond, env, func_sigs)?;
+                pc_stack.push(cond_label); // Push loop condition bounds
+                
+                typecheck_stmts(body, env, pc_stack, ret_type, func_sigs)?;
+                
+                pc_stack.pop(); // Pop off context
+            }
+            Stmt::Return(expr_opt) => {
+                let expr_label = match expr_opt {
+                    Some(expr) => evaluate_label(expr, env, func_sigs)?,
+                    None => SecurityLabel::Public,
+                };
+                let declared_ret_label = get_label(ret_type);
+                check_flow(&expr_label, &declared_ret_label).map_err(|e| TypeError::ExplicitLeak(format!("{} in return statement", e)))?;
+                
+                // Implicit flow: Returning from within an 'if (Secret)' implicitly leaks the condition.
+                let effective_pc = get_effective_pc(pc_stack);
+                check_flow(&effective_pc, &declared_ret_label).map_err(|e| TypeError::ImplicitLeak(format!("{} in return statement", e)))?;
+            }
             Stmt::Expr(expr) => {
-                evaluate_label(expr, env)?;
+                evaluate_label(expr, env, func_sigs)?;
             }
         }
     }
@@ -98,20 +123,20 @@ fn get_label(ty: &Type) -> SecurityLabel {
     }
 }
 
-fn evaluate_label(expr: &Expr, env: &HashMap<String, SecurityLabel>) -> Result<SecurityLabel, TypeError> {
+fn evaluate_label(expr: &Expr, env: &HashMap<String, SecurityLabel>, func_sigs: &HashMap<String, SecurityLabel>) -> Result<SecurityLabel, TypeError> {
     match expr {
         Expr::Number(_) | Expr::StringLiteral(_) => Ok(SecurityLabel::Public),
         Expr::Var(name) => {
             let lbl = env.get(name).ok_or_else(|| TypeError::UndefinedVariable(name.clone()))?;
             Ok(lbl.clone())
         }
-        Expr::Call(_, args) => {
-            let mut highest = SecurityLabel::Public;
+        Expr::Call(func_name, args) => {
             for arg in args {
-                let l = evaluate_label(arg, env)?;
-                highest = join(&highest, &l);
+                evaluate_label(arg, env, func_sigs)?;
             }
-            Ok(highest)
+            let ret_label = func_sigs.get(func_name)
+                .ok_or_else(|| TypeError::UndefinedVariable(format!("Function '{}' not found", func_name)))?;
+            Ok(ret_label.clone())
         }
         Expr::Declassify(inner_expr, algorithm) => {
             // Validate the algorithm is in the approved whitelist
@@ -121,7 +146,7 @@ fn evaluate_label(expr: &Expr, env: &HashMap<String, SecurityLabel>) -> Result<S
                 ));
             }
             // Evaluate the inner expression to confirm it exists
-            let _inner_label = evaluate_label(inner_expr, env)?;
+            let _inner_label = evaluate_label(inner_expr, env, func_sigs)?;
             // Declassify strips the label down to Public
             println!("[TELOS IFC] declassify: stripping label via approved algorithm '{}'", algorithm);
             Ok(SecurityLabel::Public)

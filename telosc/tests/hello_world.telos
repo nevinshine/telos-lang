@@ -1,0 +1,28 @@
+intent proxy {
+    allow Capability::Net::Connect {
+        host: "api.secure.com",
+        port: 443,
+    }
+}
+
+sync pipelock {
+    endpoint: "localhost:9090",
+}
+
+fn process_telemetry(auth_token: Secret<String>, iterations: Public<I64>) -> Public<I64> {
+    let sanitized_auth: Public<String> = declassify(auth_token, "AES-256-GCM");
+    let safe_counter: Public<I64> = 0;
+    
+    while iterations {
+        safe_counter = iterations;
+    }
+    
+    return safe_counter;
+}
+
+fn main() -> Void {
+    let root_secret: Secret<String> = "xoxb-core-secret-key-12345";
+    let cycles: Public<I64> = 10;
+    
+    let public_result: Public<I64> = process_telemetry(root_secret, cycles);
+}

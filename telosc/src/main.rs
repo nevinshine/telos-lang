@@ -20,11 +20,18 @@ fn main() {
 
     if args.len() > 1 {
         let content = std::fs::read_to_string(&args[1]).expect("Failed to read file");
-        if let Ok(prog) = crate::parser::program_parser().parse(content) {
-            program = prog;
-            println!("Successfully parsed Program, Intents, and Function blocks!");
-        } else {
-            println!("Syntax error matching top-level script.");
+        match crate::parser::program_parser().parse(content) {
+            Ok(prog) => {
+                program = prog;
+                println!("Successfully parsed Program, Intents, and Function blocks!");
+            }
+            Err(errs) => {
+                println!("Syntax error matching top-level script:");
+                for e in errs {
+                    println!("{:?}", e);
+                }
+                std::process::exit(1);
+            }
         }
     }
 

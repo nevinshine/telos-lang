@@ -1,0 +1,16 @@
+fn filter_data(token: Secret<String>, index: Public<I64>) -> Public<I64> {
+    let safe: Public<String> = declassify(token, "SHA-256");
+    let counter: Public<I64> = 0;
+    
+    while index {
+        counter = index;
+    }
+    
+    return counter;
+}
+
+fn main() -> Void {
+    let secret_token: Secret<String> = "api_key_12345";
+    let index_val: Public<I64> = 5;
+    let result: Public<I64> = filter_data(secret_token, index_val);
+}

@@ -1,0 +1,14 @@
+fn implicit_leak(token: Secret<I64>) -> Public<I64> {
+    let counter: Public<I64> = 0;
+    
+    while token {
+        counter = 1;
+    }
+    
+    return counter;
+}
+
+fn main() -> Void {
+    let secret_token: Secret<I64> = 100;
+    let result: Public<I64> = implicit_leak(secret_token);
+}

@@ -1,6 +1,6 @@
 use z3::{
     ast::{Ast, BV},
-    Config, Context, Solver, SatResult,
+    Context, Solver, SatResult,
 };
 use inkwell::module::Module;
 use inkwell::values::{FunctionValue, InstructionValue};
@@ -19,11 +19,11 @@ pub enum VerificationResult {
 struct BPFSymbolicState<'ctx> {
     registers: HashMap<u32, BV<'ctx>>,
     /// Track which registers are initialized
-    initialized: Vec<bool>,
+    _initialized: Vec<bool>,
     /// Path condition accumulated
-    path_condition: z3::ast::Bool<'ctx>,
+    _path_condition: z3::ast::Bool<'ctx>,
     /// SSA version counter per register
-    ssa_version: HashMap<u32, u32>,
+    _ssa_version: HashMap<u32, u32>,
 }
 
 impl<'ctx> BPFSymbolicState<'ctx> {
@@ -45,26 +45,26 @@ impl<'ctx> BPFSymbolicState<'ctx> {
 
         Self {
             registers,
-            initialized,
-            path_condition: z3::ast::Bool::from_bool(ctx, true),
-            ssa_version: HashMap::new(),
+            _initialized: initialized,
+            _path_condition: z3::ast::Bool::from_bool(ctx, true),
+            _ssa_version: HashMap::new(),
         }
     }
 
     /// Create fresh SSA name for register
-    fn fresh_register(
+    fn _fresh_register(
         &mut self,
         ctx: &'ctx Context,
         reg: u32,
     ) -> BV<'ctx> {
-        let version = self.ssa_version
+        let version = self._ssa_version
             .entry(reg)
             .and_modify(|v| *v += 1)
             .or_insert(1);
         let name = format!("R{}_{}", reg, version);
         let bv = BV::new_const(ctx, name.as_str(), 64);
         self.registers.insert(reg, bv.clone());
-        self.initialized[reg as usize] = true;
+        self._initialized[reg as usize] = true;
         bv
     }
 }
@@ -227,7 +227,7 @@ impl<'ctx> SMTVerifier<'ctx> {
     fn verify_memory_access(
         &self,
         _inst: InstructionValue,
-        state: &mut BPFSymbolicState<'ctx>,
+        _state: &mut BPFSymbolicState<'ctx>,
         fp: &BV<'ctx>,
         stack_bottom: &BV<'ctx>,
     ) -> VerificationResult {

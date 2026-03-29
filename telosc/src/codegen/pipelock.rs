@@ -25,7 +25,7 @@ pub fn synthesize_event_consumer<'ctx>(
     let i32_type = ctx.i32_type();
     let i64_type = ctx.i64_type();
     let void_type = ctx.void_type();
-    let i8_ptr_type = i8_type.ptr_type(inkwell::AddressSpace::default());
+    let _i8_ptr_type = i8_type.ptr_type(inkwell::AddressSpace::default());
 
     // TelosEvent struct type
     let event_struct = ctx.struct_type(&[
@@ -61,7 +61,7 @@ pub fn synthesize_event_consumer<'ctx>(
     builder.position_at_end(entry_bb);
 
     // Allocate a local TelosEvent buffer for receiving events
-    let event_buf = builder.build_alloca(event_struct, "event_buf");
+    let _event_buf = builder.build_alloca(event_struct, "event_buf");
 
     // Store a marker indicating the consumer is initialized
     // In a real implementation, this would loop on ring_buffer__poll()
@@ -100,7 +100,7 @@ pub fn synthesize_consumer_spawner<'ctx>(
     consumer_fn: FunctionValue<'ctx>,
 ) {
     let builder = ctx.create_builder();
-    let i32_type = ctx.i32_type();
+    let _i32_type = ctx.i32_type();
 
     // Define: void telos_pipelock_init(void)
     let init_fn_type = ctx.void_type().fn_type(&[], false);

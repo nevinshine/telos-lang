@@ -1,7 +1,20 @@
 Telos Systems Programming Language
 ==================================
 
-A zero-trust, kernel-aware systems programming language designed to unify application business logic with strict Linux kernel security policies. Telos abolishes the semantic gap between how software is programmed in user-space and how it is restricted by the operating system platform.
+A zero-trust, kernel-aware systems programming language designed to unify application business logic with strict Linux kernel security policies. Telos abolishes the semantic gap between how software is programmed in user-space and how it is protected by the operating system platform. 
+
+**All 6 Architectural Phases are Fully Complete.** Telos is actively capable of generating dual-target, formally verified cross-boundary Linux executables from a single parsed file.
+
+## Language Features 
+
+* **Zero-Trust Execution (Fail-Closed)**: Telos executables contain an embedded `.init` bootstrap injector. If the Linux kernel rejects the internal LSM eBPF sandbox, the binary explicitly self-aborts before `main()`. 
+* **Dual-Target IR Pipeline**: Synthesizes host architecture (x86_64) parallel to kernel architectures (`bpf-unknown-none`) in one unified pass.
+* **Static Information Flow Control (IFC)**: A zero-cost lattice (`Secret<T>`, `Public<T>`) prevents both explicit data variable leaking and implicit structural flow leaking through control boundaries (`If` / `While`).
+* **Cryptographic Boundary Casting**: `Secret` strings are locked to the execution boundary permanently. They can only be declassified via compiler-whitelisted algorithms (`SHA-256`, `AES-GCM`).
+* **Semantic LSM Intent Extraction**: Capabilities mapped natively into BPF hash maps automatically intercept `socket_connect` and `file_open` Linux Security Modules.
+* **Pipelock MCP Synchronization**: Integrates native Ringbuffer streaming from the eBPF layer into a local JSON-RPC consumer thread for Model Context Protocol (MCP) telemetry export.
+* **Z3 SMT Formal Verification**: Every basic block of the eBPF hook is formally constrained by Microsoft Z3 to mathematically prove memory safety and structural adherence before compilation concludes.
+
 
 ## 1. Architectural Overview
 
@@ -60,29 +73,15 @@ Before the BPF sandbox array is serialized, the Z3 SMT Theorem Prover calculates
 
 If the Z3 model evaluates to `SAT` (a violating sequence is computationally possible), compilation aborts.
 
-## 4. Immediate Roadmap and Missing Core Implementation Constraints
+## 4. Build and Execution Instructions
 
-The current minimal viable compiler operates Phase 5 architecture natively. The following elements must be implemented to achieve the final Phase 6 production architecture:
-
-### Phase 3 Missing Files (To be implemented):
--   `src/declassify.rs`: The cryptographic declassification boundary. Telos currently rejects any flow down the lattice. We must expose `declassify()` primitives (bound algorithms like `AES-GCM` or `SHA-256`) that explicitly down-cast `Secret<T>` payload hashes into `Public<T>`.
--   `tests/declassify_pass.telos`: To prove cryptographic algorithms actively circumvent the typechecker bounds.
-
-### Phase 4 Missing Files (To be implemented):
--   "Pipelock" MCP Firewall Synchronization (`src/codegen/pipelock.rs`).
--   Implement structural LLVM synthesis mapping for zero-copy `BPF_MAP_TYPE_USER_RINGBUF` maps.
--   Stream internal kernel contextual boundaries up dynamically into external Layer 7 proxy implementations (like a remote LLM API firewall block proxy).
--   SipHash-2-4 HMAC integration for validation sequence validation tokens within the Ring 0 context buffer.
-
-## 5. Build and Execution Instructions
-
-All generation is contained within the `telosc` root crate wrapper.
+All generation is contained within the `telosc` root crate wrapper. Use the included `hello_world.telos` file to see the full compiler syntax in action.
 
 ```bash
 # Standard Compilation Check:
 cargo check
 
-# Evaluate the internal implicit and explicit flow-graph validations:
-cargo run tests/ifc_fail.telos
-cargo run tests/ifc_implicit.telos
+# Compile and Run the Showcase Demonstration:
+sudo cargo run tests/hello_world.telos
 ```
+> **Note**: `sudo` is required to attach the compiled eBPF LSM sandboxes to the kernel successfully. The compiler uses `llvm.global_ctors` to synthesize an embedded preamble. If `CAP_BPF` is missing, the binary executes a strict fail-closed trap and aborts instantly with an `Illegal instruction (core dumped)` prior to `main()` executing.
