@@ -1,0 +1,5 @@
+fn declassify_fail() -> Void {
+    let secret_key: Secret<String> = "super_secret_api_key";
+    
+    let unsafe_output: Public<String> = declassify(secret_key, "ROT13");
+}

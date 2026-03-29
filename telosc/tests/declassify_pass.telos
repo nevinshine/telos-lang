@@ -1,0 +1,5 @@
+fn declassify_pass() -> Void {
+    let secret_key: Secret<String> = "super_secret_api_key";
+    
+    let safe_hash: Public<String> = declassify(secret_key, "SHA-256");
+}

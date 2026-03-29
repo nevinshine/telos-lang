@@ -51,6 +51,8 @@ pub enum Expr {
     StringLiteral(String),
     Var(String),
     Call(String, Vec<Expr>),
+    /// declassify(expr, "ALGORITHM") — strips Secret label to Public via cryptographic boundary
+    Declassify(Box<Expr>, String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -156,10 +158,24 @@ pub fn expr_parser() -> impl Parser<char, Expr, Error = Simple<char>> {
     let number_literal = text::int(10).try_map(|s: String, span| {
         i64::from_str(&s).map_err(|e| Simple::custom(span, format!("{}", e)))
     }).map(Expr::Number);
-    
+
+    let algorithm_literal = filter(|&c: &char| c != '"')
+        .repeated()
+        .delimited_by(just('"'), just('"'))
+        .collect::<String>();
+
     let var = text::ident().map(Expr::Var);
+
+    // declassify(var, "AES-GCM")
+    let declassify = just("declassify").padded()
+        .ignore_then(just('(').padded())
+        .ignore_then(text::ident().padded())
+        .then_ignore(just(',').padded())
+        .then(algorithm_literal.padded())
+        .then_ignore(just(')').padded())
+        .map(|(var_name, algo)| Expr::Declassify(Box::new(Expr::Var(var_name)), algo));
     
-    string_literal.or(number_literal).or(var).padded()
+    declassify.or(string_literal).or(number_literal).or(var).padded()
 }
 
 pub fn stmt_parser() -> impl Parser<char, Stmt, Error = Simple<char>> {

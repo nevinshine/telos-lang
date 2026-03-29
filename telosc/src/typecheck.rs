@@ -1,11 +1,24 @@
 use crate::parser::{Program, Function, Stmt, Expr, Type, SecurityLabel};
 use std::collections::HashMap;
 
+/// Approved cryptographic algorithms that may declassify Secret data.
+const APPROVED_ALGORITHMS: &[&str] = &[
+    "AES-GCM",
+    "AES-256-GCM",
+    "SHA-256",
+    "SHA-384",
+    "SHA-512",
+    "HMAC-SHA256",
+    "ChaCha20-Poly1305",
+    "Ed25519",
+];
+
 #[derive(Debug)]
 pub enum TypeError {
     ImplicitLeak(String),
     ExplicitLeak(String),
     UndefinedVariable(String),
+    InvalidDeclassify(String),
 }
 
 pub fn typecheck_program(program: &Program) -> Result<(), TypeError> {
@@ -87,7 +100,7 @@ fn get_label(ty: &Type) -> SecurityLabel {
 
 fn evaluate_label(expr: &Expr, env: &HashMap<String, SecurityLabel>) -> Result<SecurityLabel, TypeError> {
     match expr {
-        Expr::Number(_) | Expr::StringLiteral(_) => Ok(SecurityLabel::Public), // Literals are public
+        Expr::Number(_) | Expr::StringLiteral(_) => Ok(SecurityLabel::Public),
         Expr::Var(name) => {
             let lbl = env.get(name).ok_or_else(|| TypeError::UndefinedVariable(name.clone()))?;
             Ok(lbl.clone())
@@ -98,8 +111,20 @@ fn evaluate_label(expr: &Expr, env: &HashMap<String, SecurityLabel>) -> Result<S
                 let l = evaluate_label(arg, env)?;
                 highest = join(&highest, &l);
             }
-            // A function call returns the supremum of its arguments (unless declassified)
             Ok(highest)
+        }
+        Expr::Declassify(inner_expr, algorithm) => {
+            // Validate the algorithm is in the approved whitelist
+            if !APPROVED_ALGORITHMS.iter().any(|a| a == algorithm) {
+                return Err(TypeError::InvalidDeclassify(
+                    format!("Algorithm '{}' is not in the approved cryptographic whitelist. Approved: {:?}", algorithm, APPROVED_ALGORITHMS)
+                ));
+            }
+            // Evaluate the inner expression to confirm it exists
+            let _inner_label = evaluate_label(inner_expr, env)?;
+            // Declassify strips the label down to Public
+            println!("[TELOS IFC] declassify: stripping label via approved algorithm '{}'", algorithm);
+            Ok(SecurityLabel::Public)
         }
     }
 }
