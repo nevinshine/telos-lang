@@ -1,5 +1,5 @@
 intent file_reader {
-    allow Capability::Fs::Open {
+    allow Capability::File::Open {
         path: "/var/log/syslog",
         mode: "readonly",
     }

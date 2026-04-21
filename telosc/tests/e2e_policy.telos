@@ -6,7 +6,7 @@ intent database_proxy {
 }
 
 intent restrict_disk {
-    allow Capability::Fs::Open {
+    allow Capability::File::Open {
         path: "/opt/secure/vault",
         mode: "readonly",
     }
