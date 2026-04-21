@@ -1,9 +1,39 @@
-Telos Systems Programming Language
-==================================
+Telos: Policy-as-code
+=====================
 
-A zero-trust, kernel-aware systems programming language designed to unify application business logic with strict Linux kernel security policies. Telos abolishes the semantic gap between how software is programmed in user-space and how it is protected by the operating system platform. 
+[![CI](https://github.com/nevinshine/telos-lang/actions/workflows/ci.yml/badge.svg)](https://github.com/nevinshine/telos-lang/actions/workflows/ci.yml)
 
-**All 9 Architectural Phases are Fully Complete.** Telos is actively capable of generating dual-target, formally verified cross-boundary Linux executables from a single parsed file.
+A strictly typed, policy-as-code systems language structured for zero-trust Linux environments. Telos unifies application logic with formally-verified Linux kernel security capabilities natively.
+
+## 5-Minute Quickstart
+
+Telos generates formally-verified, fail-closed Linux executables containing embedded eBPF LSM sandboxes directly from your source.
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/nevinshine/telos-lang.git
+cd telos-lang/telosc
+
+# 2. Build the compiler pipeline (Requires LLVM 15 and Z3 via your package manager)
+cargo build
+
+# 3. Compile & Run the Demonstration Sandbox (Root required to map the BPF)
+sudo cargo run tests/hello_world.telos
+```
+
+## v0.1 MVP Scope
+
+**What Telos v0.1 Is:**
+- A dual-target generator translating semantic actions into x86_64 host instructions + kernel-level eBPF sandboxes.
+- A static mathematical verifier using Microsoft Z3 to mathematically prove all kernel constraints are satisfied prior to emission.
+- A language enforcing Information Flow Control (`Secret<T>` vs `Public<T>`) natively, guaranteeing zero data leakage at compile time.
+
+**What Telos v0.1 Is Not:**
+- A generalized general-purpose language with a massive standard library (like Rust or Go). It is designed strictly for high-security wedge code.
+- A cross-platform framework. It is tightly bound directly into the Linux capability matrix.
+
+---
+
 
 ## Language Features 
 

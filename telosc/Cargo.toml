@@ -10,3 +10,4 @@ goblin = "0.8"
 z3 = { version = "0.12", features = ["static-link-z3"] }
 either = "1.9"
 smallvec = "1.11"
+clap = { version = "4.4", features = ["derive"] }

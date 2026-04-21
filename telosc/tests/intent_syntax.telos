@@ -1,0 +1,11 @@
+intent file_reader {
+    allow Capability::Fs::Open {
+        path: "/var/log/syslog",
+        mode: "readonly",
+    }
+}
+
+fn log_parser(secret_token: Secret<String>) -> Void {
+    // This file ensures the basic parsing of the generic Linux FS capability block succeeds
+    let log_data: Public<I64> = 0;
+}

@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build_and_test:
+    runs-on: ubuntu-22.04
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install Linux Dependencies (LLVM 15 & Z3)
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y llvm-15 llvm-15-dev libz3-dev z3
+        
+    - name: Setup Rust Tools
+      uses: dtolnay/rust-toolchain@stable
+      
+    - name: Build Telos Compiler
+      run: cargo build --verbose
+      working-directory: ./telosc
+      
+    - name: Run Integration Tests
+      run: cargo test --verbose
+      working-directory: ./telosc
