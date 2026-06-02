@@ -63,6 +63,8 @@ pub enum Stmt {
     While(Expr, Vec<Stmt>),
     Return(Option<Expr>),
     Expr(Expr),
+    Intend(String),
+    TryCatch(Vec<Stmt>, Vec<Stmt>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -220,6 +222,11 @@ pub fn stmt_parser() -> impl Parser<char, Stmt, Error = Simple<char>> {
         .then_ignore(just(';').padded())
         .map(Stmt::Expr);
 
+    let intend_stmt = just("intend").padded()
+        .ignore_then(text::ident().padded())
+        .then_ignore(just(';').padded())
+        .map(Stmt::Intend);
+
     // Provide recursive placeholder
     let mut stmt = Recursive::declare();
 
@@ -242,7 +249,13 @@ pub fn stmt_parser() -> impl Parser<char, Stmt, Error = Simple<char>> {
         .then_ignore(just(';').padded())
         .map(Stmt::Return);
 
-    stmt.define(let_stmt.or(assign_stmt).or(if_stmt).or(while_stmt).or(return_stmt).or(expr_stmt));
+    let try_catch_stmt = just("try_intent").padded()
+        .ignore_then(stmt.clone().repeated().delimited_by(just('{').padded(), just('}').padded()))
+        .then_ignore(just("catch").padded().then(just("PolicyViolation").padded()))
+        .then(stmt.clone().repeated().delimited_by(just('{').padded(), just('}').padded()))
+        .map(|(try_block, catch_block)| Stmt::TryCatch(try_block, catch_block));
+
+    stmt.define(let_stmt.or(assign_stmt).or(if_stmt).or(while_stmt).or(return_stmt).or(intend_stmt).or(try_catch_stmt).or(expr_stmt));
     stmt
 }
 

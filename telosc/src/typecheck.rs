@@ -1,5 +1,6 @@
 use crate::parser::{Program, Function, Stmt, Expr, Type, SecurityLabel};
 use std::collections::HashMap;
+use z3::{ast::Ast, Config, Context, Solver};
 
 /// Approved cryptographic algorithms that may declassify Secret data.
 const APPROVED_ALGORITHMS: &[&str] = &[
@@ -27,90 +28,155 @@ pub fn typecheck_program(program: &Program) -> Result<(), TypeError> {
         func_sigs.insert(func.name.clone(), get_label(&func.ret_type));
     }
 
+    let mut cfg = Config::new();
+    // Enable core extraction for informative errors
+    cfg.set_bool_param_value("unsat_core", true);
+    let ctx = Context::new(&cfg);
+    let solver = Solver::new(&ctx);
+
     for func in &program.functions {
-        typecheck_function(func, &func_sigs)?;
+        typecheck_function(func, &func_sigs, &program.intents, &ctx, &solver)?;
     }
+
+    let res = solver.check();
+    if res == z3::SatResult::Unsat {
+        let core = solver.get_unsat_core();
+        return Err(TypeError::ExplicitLeak(format!("Z3 SMT IFC Violation: Taint flow proved Unsat. Invalid downward flow detected! Core: {:?}", core)));
+    }
+
     Ok(())
 }
 
-fn typecheck_function(func: &Function, func_sigs: &HashMap<String, SecurityLabel>) -> Result<(), TypeError> {
-    let mut env: HashMap<String, SecurityLabel> = HashMap::new();
-    let mut pc_stack: Vec<SecurityLabel> = Vec::new();
+fn typecheck_function<'ctx>(
+    func: &Function, 
+    func_sigs: &HashMap<String, SecurityLabel>, 
+    intents: &[crate::parser::IntentDecl],
+    ctx: &'ctx Context,
+    solver: &Solver<'ctx>
+) -> Result<(), TypeError> {
+    let mut env: HashMap<String, z3::ast::Int<'ctx>> = HashMap::new();
+    let mut pc_stack: Vec<z3::ast::Int<'ctx>> = Vec::new();
 
     // Register arguments
     for (arg_name, arg_type) in &func.args {
-        env.insert(arg_name.clone(), get_label(arg_type));
+        let label = get_label(arg_type);
+        let z3_val = z3::ast::Int::from_i64(ctx, label_to_int(&label));
+        env.insert(arg_name.clone(), z3_val);
     }
 
-    typecheck_stmts(&func.body, &mut env, &mut pc_stack, &func.ret_type, func_sigs)
+    let ret_label = get_label(&func.ret_type);
+    let ret_z3 = z3::ast::Int::from_i64(ctx, label_to_int(&ret_label));
+
+    typecheck_stmts(&func.body, &mut env, &mut pc_stack, &ret_z3, func_sigs, intents, ctx, solver)
 }
 
-fn typecheck_stmts(stmts: &[Stmt], env: &mut HashMap<String, SecurityLabel>, pc_stack: &mut Vec<SecurityLabel>, ret_type: &Type, func_sigs: &HashMap<String, SecurityLabel>) -> Result<(), TypeError> {
+fn typecheck_stmts<'ctx>(
+    stmts: &[Stmt], 
+    env: &mut HashMap<String, z3::ast::Int<'ctx>>, 
+    pc_stack: &mut Vec<z3::ast::Int<'ctx>>, 
+    ret_type: &z3::ast::Int<'ctx>, 
+    func_sigs: &HashMap<String, SecurityLabel>, 
+    intents: &[crate::parser::IntentDecl],
+    ctx: &'ctx Context,
+    solver: &Solver<'ctx>
+) -> Result<(), TypeError> {
+    let mut stmt_counter = 0;
     for stmt in stmts {
+        stmt_counter += 1;
         match stmt {
             Stmt::Let(name, ty, expr) => {
                 let decl_label = get_label(ty);
-                let expr_label = evaluate_label(expr, env, func_sigs)?;
+                let decl_val = label_to_int(&decl_label);
+                let dst_node = z3::ast::Int::from_i64(ctx, decl_val);
                 
-                // Enforce Explicit Flow
-                check_flow(&expr_label, &decl_label).map_err(|e| TypeError::ExplicitLeak(format!("{} in binding '{}'", e, name)))?;
+                let src_node = evaluate_label_z3(expr, env, func_sigs, ctx)?;
                 
-                // Enforce Implicit Flow (PC block ceiling)
-                let effective_pc = get_effective_pc(pc_stack);
-                check_flow(&effective_pc, &decl_label).map_err(|e| TypeError::ImplicitLeak(format!("{} in binding '{}'", e, name)))?;
+                // Assert dst >= src
+                let constraint = dst_node.ge(&src_node);
+                let marker = z3::ast::Bool::new_const(ctx, format!("flow_let_{}_{}", name, stmt_counter).as_str());
+                solver.assert_and_track(&constraint, &marker);
+
+                let effective_pc = get_effective_pc_z3(pc_stack, ctx);
+                let pc_constraint = dst_node.ge(&effective_pc);
+                let pc_marker = z3::ast::Bool::new_const(ctx, format!("pc_let_{}_{}", name, stmt_counter).as_str());
+                solver.assert_and_track(&pc_constraint, &pc_marker);
                 
-                env.insert(name.clone(), decl_label);
+                env.insert(name.clone(), dst_node);
             }
             Stmt::Assign(name, expr) => {
-                let target_label = env.get(name).ok_or_else(|| TypeError::UndefinedVariable(name.clone()))?.clone();
-                let expr_label = evaluate_label(expr, env, func_sigs)?;
+                let target_node = env.get(name).ok_or_else(|| TypeError::UndefinedVariable(name.clone()))?.clone();
+                let src_node = evaluate_label_z3(expr, env, func_sigs, ctx)?;
                 
-                check_flow(&expr_label, &target_label).map_err(|e| TypeError::ExplicitLeak(format!("{} in assignment '{}'", e, name)))?;
+                let constraint = target_node.ge(&src_node);
+                let marker = z3::ast::Bool::new_const(ctx, format!("flow_assign_{}_{}", name, stmt_counter).as_str());
+                solver.assert_and_track(&constraint, &marker);
                 
-                // Enforce Implicit Flow
-                let effective_pc = get_effective_pc(pc_stack);
-                check_flow(&effective_pc, &target_label).map_err(|e| TypeError::ImplicitLeak(format!("{} in assignment '{}'", e, name)))?;
+                let effective_pc = get_effective_pc_z3(pc_stack, ctx);
+                let pc_constraint = target_node.ge(&effective_pc);
+                let pc_marker = z3::ast::Bool::new_const(ctx, format!("pc_assign_{}_{}", name, stmt_counter).as_str());
+                solver.assert_and_track(&pc_constraint, &pc_marker);
             }
             Stmt::If(cond, body) => {
-                let cond_label = evaluate_label(cond, env, func_sigs)?;
-                pc_stack.push(cond_label); // Push conditional scope bounds
+                let cond_node = evaluate_label_z3(cond, env, func_sigs, ctx)?;
+                pc_stack.push(cond_node);
                 
-                typecheck_stmts(body, env, pc_stack, ret_type, func_sigs)?;
+                typecheck_stmts(body, env, pc_stack, ret_type, func_sigs, intents, ctx, solver)?;
                 
-                pc_stack.pop(); // Pop off context
+                pc_stack.pop();
             }
             Stmt::While(cond, body) => {
-                let cond_label = evaluate_label(cond, env, func_sigs)?;
-                pc_stack.push(cond_label); // Push loop condition bounds
+                let cond_node = evaluate_label_z3(cond, env, func_sigs, ctx)?;
+                pc_stack.push(cond_node);
                 
-                typecheck_stmts(body, env, pc_stack, ret_type, func_sigs)?;
+                typecheck_stmts(body, env, pc_stack, ret_type, func_sigs, intents, ctx, solver)?;
                 
-                pc_stack.pop(); // Pop off context
+                pc_stack.pop();
             }
             Stmt::Return(expr_opt) => {
-                let expr_label = match expr_opt {
-                    Some(expr) => evaluate_label(expr, env, func_sigs)?,
-                    None => SecurityLabel::Public,
+                let src_node = match expr_opt {
+                    Some(expr) => evaluate_label_z3(expr, env, func_sigs, ctx)?,
+                    None => z3::ast::Int::from_i64(ctx, label_to_int(&SecurityLabel::Public)),
                 };
-                let declared_ret_label = get_label(ret_type);
-                check_flow(&expr_label, &declared_ret_label).map_err(|e| TypeError::ExplicitLeak(format!("{} in return statement", e)))?;
                 
-                // Implicit flow: Returning from within an 'if (Secret)' implicitly leaks the condition.
-                let effective_pc = get_effective_pc(pc_stack);
-                check_flow(&effective_pc, &declared_ret_label).map_err(|e| TypeError::ImplicitLeak(format!("{} in return statement", e)))?;
+                let constraint = ret_type.ge(&src_node);
+                let marker = z3::ast::Bool::new_const(ctx, format!("flow_ret_{}", stmt_counter).as_str());
+                solver.assert_and_track(&constraint, &marker);
+                
+                let effective_pc = get_effective_pc_z3(pc_stack, ctx);
+                let pc_constraint = ret_type.ge(&effective_pc);
+                let pc_marker = z3::ast::Bool::new_const(ctx, format!("pc_ret_{}", stmt_counter).as_str());
+                solver.assert_and_track(&pc_constraint, &pc_marker);
             }
             Stmt::Expr(expr) => {
-                evaluate_label(expr, env, func_sigs)?;
+                evaluate_label_z3(expr, env, func_sigs, ctx)?;
+            }
+            Stmt::Intend(name) => {
+                let exists = intents.iter().any(|i| i.name == *name);
+                if !exists {
+                    return Err(TypeError::UndefinedVariable(format!("Intent '{}' is not declared in this program.", name)));
+                }
+            }
+            Stmt::TryCatch(try_block, catch_block) => {
+                pc_stack.push(z3::ast::Int::from_i64(ctx, label_to_int(&SecurityLabel::Public)));
+                typecheck_stmts(try_block, env, pc_stack, ret_type, func_sigs, intents, ctx, solver)?;
+                pc_stack.pop();
+                
+                pc_stack.push(z3::ast::Int::from_i64(ctx, label_to_int(&SecurityLabel::Public)));
+                typecheck_stmts(catch_block, env, pc_stack, ret_type, func_sigs, intents, ctx, solver)?;
+                pc_stack.pop();
             }
         }
     }
     Ok(())
 }
 
-fn get_effective_pc(pc_stack: &[SecurityLabel]) -> SecurityLabel {
-    let mut effective = SecurityLabel::Public;
+fn get_effective_pc_z3<'ctx>(pc_stack: &[z3::ast::Int<'ctx>], ctx: &'ctx Context) -> z3::ast::Int<'ctx> {
+    let mut effective = z3::ast::Int::from_i64(ctx, 0); // Public
     for lbl in pc_stack {
-        effective = join(&effective, lbl);
+        // We need max(effective, lbl). For simplicity, since it's just AST construction,
+        // we can create an If-Then-Else: if lbl > effective then lbl else effective.
+        let cond = lbl.gt(&effective);
+        effective = cond.ite(lbl, &effective);
     }
     effective
 }
@@ -123,20 +189,47 @@ fn get_label(ty: &Type) -> SecurityLabel {
     }
 }
 
-fn evaluate_label(expr: &Expr, env: &HashMap<String, SecurityLabel>, func_sigs: &HashMap<String, SecurityLabel>) -> Result<SecurityLabel, TypeError> {
+fn label_to_int(l: &SecurityLabel) -> i64 {
+    match l {
+        SecurityLabel::Public => 0,
+        SecurityLabel::Tainted => 1,
+        SecurityLabel::Secret => 2,
+    }
+}
+
+fn evaluate_label_z3<'ctx>(
+    expr: &Expr, 
+    env: &HashMap<String, z3::ast::Int<'ctx>>, 
+    func_sigs: &HashMap<String, SecurityLabel>,
+    ctx: &'ctx Context
+) -> Result<z3::ast::Int<'ctx>, TypeError> {
     match expr {
-        Expr::Number(_) | Expr::StringLiteral(_) => Ok(SecurityLabel::Public),
+        Expr::Number(_) | Expr::StringLiteral(_) => Ok(z3::ast::Int::from_i64(ctx, label_to_int(&SecurityLabel::Public))),
         Expr::Var(name) => {
             let lbl = env.get(name).ok_or_else(|| TypeError::UndefinedVariable(name.clone()))?;
             Ok(lbl.clone())
         }
         Expr::Call(func_name, args) => {
+            if func_name == "heki_drawbridge_update" || func_name == "socket_open" || func_name == "socket_close" {
+                for arg in args {
+                    evaluate_label_z3(arg, env, func_sigs, ctx)?;
+                }
+                return Ok(z3::ast::Int::from_i64(ctx, label_to_int(&SecurityLabel::Public)));
+            }
+
+            let mut max_arg = z3::ast::Int::from_i64(ctx, 0);
             for arg in args {
-                evaluate_label(arg, env, func_sigs)?;
+                let arg_lbl = evaluate_label_z3(arg, env, func_sigs, ctx)?;
+                let cond = arg_lbl.gt(&max_arg);
+                max_arg = cond.ite(&arg_lbl, &max_arg);
             }
             let ret_label = func_sigs.get(func_name)
                 .ok_or_else(|| TypeError::UndefinedVariable(format!("Function '{}' not found", func_name)))?;
-            Ok(ret_label.clone())
+            let ret_z3 = z3::ast::Int::from_i64(ctx, label_to_int(ret_label));
+            
+            // max(ret_z3, max_arg)
+            let cond = max_arg.gt(&ret_z3);
+            Ok(cond.ite(&max_arg, &ret_z3))
         }
         Expr::Declassify(inner_expr, algorithm) => {
             // Validate the algorithm is in the approved whitelist
@@ -145,32 +238,9 @@ fn evaluate_label(expr: &Expr, env: &HashMap<String, SecurityLabel>, func_sigs: 
                     format!("Algorithm '{}' is not in the approved cryptographic whitelist. Approved: {:?}", algorithm, APPROVED_ALGORITHMS)
                 ));
             }
-            // Evaluate the inner expression to confirm it exists
-            let _inner_label = evaluate_label(inner_expr, env, func_sigs)?;
-            // Declassify strips the label down to Public
+            let _inner_label = evaluate_label_z3(inner_expr, env, func_sigs, ctx)?;
             println!("[TELOS IFC] declassify: stripping label via approved algorithm '{}'", algorithm);
-            Ok(SecurityLabel::Public)
+            Ok(z3::ast::Int::from_i64(ctx, label_to_int(&SecurityLabel::Public)))
         }
-    }
-}
-
-// Secret > Public
-// Tainted is unrelated to Confidentiality lattice, or treated as Low Confidentiality / Low Integrity.
-fn check_flow(from: &SecurityLabel, to: &SecurityLabel) -> Result<(), String> {
-    match (from, to) {
-        (SecurityLabel::Secret, SecurityLabel::Public) => Err("Cannot flow Secret data into Public sink".to_string()),
-        (SecurityLabel::Secret, SecurityLabel::Tainted) => Err("Cannot flow Secret data into Tainted sink".to_string()),
-        (SecurityLabel::Tainted, SecurityLabel::Public) => Err("Cannot flow Tainted data into Public sink".to_string()),
-        _ => Ok(()) // Allowed bounds
-    }
-}
-
-fn join(l1: &SecurityLabel, l2: &SecurityLabel) -> SecurityLabel {
-    if l1 == &SecurityLabel::Secret || l2 == &SecurityLabel::Secret {
-        SecurityLabel::Secret
-    } else if l1 == &SecurityLabel::Tainted || l2 == &SecurityLabel::Tainted {
-        SecurityLabel::Tainted
-    } else {
-        SecurityLabel::Public
     }
 }

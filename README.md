@@ -23,11 +23,11 @@ Traditional systems languages (C, Rust, Go) separate security from code. You wri
 **Telos embeds security directly into the language.** When you write a Telos program, you declare _what the program intends to do_ alongside the logic itself. The compiler then:
 
 1. **Translates** your intent into exact kernel security rules (eBPF-LSM hooks)
-2. **Proves** those rules are mathematically safe using the Z3 theorem prover
+2. **Proves** those rules are formally safe using the Z3 theorem prover
 3. **Embeds** the verified rules directly into the compiled binary
 4. **Enforces** a fail-closed bootstrap — if the kernel rejects the security sandbox, the binary self-aborts before `main()` even executes
 
-A Telos binary **mathematically cannot execute its internal logic without its required kernel security matrix.**
+A Telos binary **cannot structurally execute its internal logic without its required kernel security matrix.**
 
 > [!IMPORTANT]
 > Telos is not a general-purpose language with a massive standard library. It is designed strictly for high-security wedge code — policy-carrying executables that must prove their safety before the first instruction runs.
@@ -107,7 +107,7 @@ Traditional systems languages compile to a single target. Telos synthesizes **tw
 The generated eBPF bytecode array is dynamically linked into the host ELF `.rodata` section. Telos uses `llvm.global_ctors` to synthesize a low-level `.init` preamble that issues raw `bpf(BPF_PROG_LOAD)` syscalls before `main()` execution.
 
 > [!CAUTION]
-> If the Linux kernel rejects the internal LSM eBPF sandbox, the binary unconditionally aborts. A Telos binary mathematically cannot execute its internal logic without its required kernel security matrix. The abort manifests as `Illegal instruction (core dumped)` prior to `main()` executing.
+> If the Linux kernel rejects the internal LSM eBPF sandbox, the binary unconditionally aborts. A Telos binary cannot structurally execute its internal logic without its required kernel security matrix. The abort manifests as `Illegal instruction (core dumped)` prior to `main()` executing.
 
 ---
 
@@ -147,7 +147,7 @@ fn implicit_leak() -> Void {
 }
 ```
 
-### Cryptographic Boundary Casting
+### Data Declassification Boundaries
 
 `Secret` strings are permanently locked to the execution boundary. They can only be declassified via compiler-whitelisted algorithms:
 

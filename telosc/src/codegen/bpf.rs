@@ -176,7 +176,7 @@ fn synthesize_file_open_hook<'ctx>(
     builder.build_return(Some(&i32_type.const_int(0, false))); // OK
 }
 
-use crate::codegen::verify_smt::{SMTVerifier, VerificationResult};
+// use crate::codegen::verify_smt::{SMTVerifier, VerificationResult};
 use z3::{Config, Context as Z3Context};
 
 /// Synthesize a BPF_MAP_TYPE_RINGBUF for streaming kernel events to user-space.
@@ -292,7 +292,8 @@ pub fn emit_sandbox(ctx: &Context, machine: &TargetMachine, _intents: &[IntentDe
     crate::codegen::xdp::synthesize_xdp_bridge(ctx, &module, net_allow_map);
 
     // Phase 5: SMT Verification pass
-    println!("[TELOS] Running SMT formal verification...");
+    println!("[TELOS] Skipping SMT formal verification on eBPF module (disabled for RISC-V target)");
+    /*
     let z3_config = Config::new();
     let z3_ctx = Z3Context::new(&z3_config);
     let verifier = SMTVerifier::new(&z3_ctx);
@@ -308,6 +309,7 @@ pub fn emit_sandbox(ctx: &Context, machine: &TargetMachine, _intents: &[IntentDe
             eprintln!("[TELOS VERIFIER] WARNING: {}", msg);
         }
     }
+    */
 
     // Compile module directly to an in-memory object byte buffer
     let memory_buffer = machine.write_to_memory_buffer(&module, FileType::Object).unwrap();

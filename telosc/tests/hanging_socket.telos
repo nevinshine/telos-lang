@@ -1,0 +1,8 @@
+fn main() -> Void {
+    socket_open();
+    let cond: Public<I64> = 1;
+    if cond {
+        return;
+    }
+    socket_close();
+}

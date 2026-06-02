@@ -1,0 +1,15 @@
+intent network {
+    allow Capability::Net::Connect {
+        host: "example.com",
+        port: 80,
+    }
+}
+
+fn main() -> Void {
+    try_intent {
+        intend network;
+    } catch PolicyViolation {
+        let fallback_val: Public<I64> = 0;
+        return fallback_val;
+    }
+}

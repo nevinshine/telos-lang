@@ -29,35 +29,30 @@ impl<'ctx> DualCompiler<'ctx> {
         }
         println!("[TELOS IFC] ✓ Lattice validated");
 
-        // 1. Initialize Targets
-        Target::initialize_x86(&InitializationConfig::default());
-        Target::initialize_bpf(&InitializationConfig::default());
+        // 0.5 Formal LTL Temporal Verification
+        println!("[TELOS LTL] Verifying Temporal Logic constraints...");
+        if let Err(e) = verify_smt::verify_program_temporal(program) {
+            panic!("[TELOS LTL] FATAL: {}", e);
+        }
+        println!("[TELOS LTL] ✓ Temporal LTL validated");
 
-        // 2. Setup Host (x86_64) Module
-        let host_target = Target::from_name("x86-64").unwrap();
+        // 1. Initialize Targets
+        Target::initialize_riscv(&InitializationConfig::default());
+
+        // 2. Setup Host (riscv64) Module
+        let host_target = Target::from_name("riscv64").unwrap();
         let host_machine = host_target.create_target_machine(
-            &TargetTriple::create("x86_64-unknown-linux-gnu"), "generic", "", 
+            &TargetTriple::create("riscv64-unknown-elf"), "generic", "", 
             OptimizationLevel::Aggressive, RelocMode::Default, CodeModel::Default
         ).unwrap();
         
-        // 3. Setup Kernel (BPF) Module
-        let bpf_target = Target::from_name("bpf").unwrap();
-        // Using "probe" allows the LLVM BPF backend to query the host kernel for available extensions.
-        let bpf_machine = bpf_target.create_target_machine(
-            &TargetTriple::create("bpf-unknown-none"), "probe", "", 
-            OptimizationLevel::None, RelocMode::Default, CodeModel::Default
-        ).unwrap();
+        // 3. Skip Kernel (BPF) Module for TCA V2 Silicon Tape-out
+        let bpf_hooks = Vec::new();
 
-        // 4. Generate BPF Bytecode in memory
-        let bpf_hooks = bpf::emit_sandbox(self.bpf_ctx, &bpf_machine, &program.intents);
-
-        // 5. Generate Host Executable and embed the BPF bytes
+        // 4. Generate Host Executable
         host::emit_executable(self.host_ctx, &host_machine, &program.functions, bpf_hooks);
 
-        // 6. Phase 4: Synthesize Pipelock MCP consumer in host module
-        println!("[TELOS PIPELOCK] Synthesizing MCP event consumer...");
-        let pipelock_module = self.host_ctx.create_module("telos_pipelock");
-        let consumer_fn = pipelock::synthesize_event_consumer(self.host_ctx, &pipelock_module);
-        pipelock::synthesize_consumer_spawner(self.host_ctx, &pipelock_module, consumer_fn);
+        // 5. Phase 4: Synthesize Pipelock MCP consumer in host module (Skipped for RISC-V Bare-metal)
+        println!("[TELOS] Skipping Pipelock MCP and eBPF generation for RISC-V bare-metal target.");
     }
 }

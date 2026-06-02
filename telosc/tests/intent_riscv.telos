@@ -1,0 +1,10 @@
+intent network {
+    allow Capability::Net::Connect {
+        host: "example.com",
+        port: 80,
+    }
+}
+
+fn main() -> Void {
+    intend network;
+}

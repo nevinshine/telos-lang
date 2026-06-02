@@ -1,0 +1,3 @@
+fn main() -> Void {
+    heki_drawbridge_update(3735928559, 4096);
+}

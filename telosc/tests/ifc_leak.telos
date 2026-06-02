@@ -1,0 +1,6 @@
+fn main() -> Void {
+    let secret_val: Secret<I64> = 42;
+    let public_val: Public<I64> = 0;
+    
+    public_val = secret_val;
+}
